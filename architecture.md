@@ -196,15 +196,7 @@ FastAPI acts as the application/API layer.
 Example endpoints:
 
 ```text
-POST /api/ai/interpret
-POST /api/logic/validate
-POST /api/logic/truth-table
-POST /api/logic/sop
-POST /api/logic/pos
-POST /api/logic/simplify
-POST /api/logic/circuit
-POST /api/logic/simulate
-POST /api/logic/verify
+POST /api/generate
 GET  /api/circuits/half-adder
 GET  /api/circuits/full-adder
 GET  /api/circuits/half-subtractor
