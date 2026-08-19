@@ -23,11 +23,11 @@ import json
 from pathlib import Path
 from typing import Dict, List, Sequence
 
-from Backend.app.Engine.logic.engine import run
-from Backend.app.Engine.logic.outputs.standard_circuits_diagrmas import draw_circuit
-from Backend.app.Engine.logic.truth_table.generator import build_truth_table
-from Backend.app.Engine.logic.minimization.sop import minimal_sop
-from Backend.app.Engine.logic.circuit.generator import build_netlist
+from ...engine import run
+from ..standard_circuits_diagrmas import draw_circuit
+from ...truth_table.generator import build_truth_table
+from ...minimization.sop import minimal_sop
+from ...circuit.generator import build_netlist
 
 OUTPUT_DIR = Path(__file__).resolve().parent
 

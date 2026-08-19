@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Sequence
 
-from logic.expressions.nodes import Node, Term
+from ..expressions.nodes import Node, Term
 from .graph import Gate, reset_gate_ids
 
 

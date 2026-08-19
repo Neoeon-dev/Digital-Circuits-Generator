@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 
-from logic.circuit.graph import Gate, Node
+from ..circuit.graph import Gate, Node
 
 WIRE_COLOR = "#ffffff"
 GATE_EDGE = "#ffffff"
@@ -31,19 +31,26 @@ SVG_TWO_INPUT_Y = (15.0, 35.0)
 @lru_cache(maxsize=None)
 def _gate_svg_image(kind: str) -> np.ndarray:
     svg = SVG_GATE_DIR / f"{kind}.svg"
+
     if not svg.is_file():
         raise FileNotFoundError(
-            f"Missing gate SVG: {svg}. Put AND.svg, OR.svg, NAND.svg, NOR.svg "
-            "and NOT.svg in the standard_circuits_images directory."
+            f"Missing gate SVG: {svg}"
         )
+
     result = subprocess.run(
-        ["magick", "-background", "none", str(svg), "-alpha", "background", "png:-"],
+        [
+            "rsvg-convert",
+            "--format", "png",
+            str(svg),
+        ],
         check=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    return np.asarray(Image.open(BytesIO(result.stdout)).convert("RGBA"))
 
+    return np.asarray(
+        Image.open(BytesIO(result.stdout)).convert("RGBA")
+    )
 
 def _svg_gate_width(height: float) -> float:
     return height * SVG_VIEWBOX_WIDTH / SVG_VIEWBOX_HEIGHT

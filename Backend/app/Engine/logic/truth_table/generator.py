@@ -5,8 +5,8 @@ from __future__ import annotations
 from itertools import product
 from typing import List, Optional, Sequence, Tuple
 
-from logic.expressions.nodes import Term, product_text, sum_text
-from logic.expressions.parser import (
+from ..expressions.nodes import Term, product_text, sum_text
+from ..expressions.parser import (
     evaluate_sop,
     get_variables,
     parse_sop,

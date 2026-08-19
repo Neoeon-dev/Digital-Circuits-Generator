@@ -13,7 +13,7 @@ Literal = Tuple[str, bool]       # (variable, complemented?)
 Term = List[Literal]
 
 if TYPE_CHECKING:
-    from logic.circuit.graph import Gate
+    from ..circuit.graph import Gate
 
 Node = Union[str, "Gate"]
 

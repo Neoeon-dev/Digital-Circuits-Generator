@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import List, Sequence
 
-from logic.expressions.nodes import Term, sum_text
+from ..expressions.nodes import Term, sum_text
 from .quine_mccluskey import quine_mccluskey
 from .sop import pattern_to_product
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from logic.expressions.nodes import Term, product_text
+from ..expressions.nodes import Term, product_text
 from .quine_mccluskey import quine_mccluskey
 
 
