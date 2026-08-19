@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from logic.expressions.nodes import Term, product_text, sum_text
+from Backend.app.Engine.logic.expressions.nodes import Term, product_text, sum_text
 
 
 def format_sop(terms: Sequence[Term]) -> str:
