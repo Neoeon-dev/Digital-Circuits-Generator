@@ -1,0 +1,76 @@
+{
+  "expression": "asd",
+  "variables": [
+    "a",
+    "d",
+    "s"
+  ],
+  "variable_count": 3,
+  "truth_table": [
+    {
+      "a": 0,
+      "d": 0,
+      "s": 0,
+      "F": 0
+    },
+    {
+      "a": 0,
+      "d": 0,
+      "s": 1,
+      "F": 0
+    },
+    {
+      "a": 0,
+      "d": 1,
+      "s": 0,
+      "F": 0
+    },
+    {
+      "a": 0,
+      "d": 1,
+      "s": 1,
+      "F": 0
+    },
+    {
+      "a": 1,
+      "d": 0,
+      "s": 0,
+      "F": 0
+    },
+    {
+      "a": 1,
+      "d": 0,
+      "s": 1,
+      "F": 0
+    },
+    {
+      "a": 1,
+      "d": 1,
+      "s": 0,
+      "F": 0
+    },
+    {
+      "a": 1,
+      "d": 1,
+      "s": 1,
+      "F": 1
+    }
+  ],
+  "minterms": [
+    7
+  ],
+  "maxterms": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+  ],
+  "dont_care_terms": [],
+  "canonical_sop": "F = ads",
+  "canonical_pos": "F = (a + d + s)(a + d + s')(a + d' + s)(a + d' + s')(a' + d + s)(a' + d + s')(a' + d' + s)",
+  "simplified_sop": "F = ads",
+  "simplified_pos": "F = (s)(d)(a)"
+}
