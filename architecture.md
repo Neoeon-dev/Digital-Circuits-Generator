@@ -285,35 +285,27 @@ The Logic Engine is the core of the project.
 logic/
 ├── expressions/
 │   ├── nodes.py
-│   ├── lexer.py
 │   ├── parser.py
-│   ├── evaluator.py
-│   └── printer.py
 │
 ├── truth_table/
 │   ├── generator.py
-│   └── converter.py
 │
 ├── minimization/
 │   ├── sop.py
 │   ├── pos.py
 │   ├── quine_mccluskey.py
-│   └── kmap.py
+│
 │
 ├── circuit/
 │   ├── graph.py
 │   ├── generator.py
 │   └── simulator.py
 │
-├── standard_circuits/
-│   ├── half_adder.py
-│   ├── full_adder.py
-│   ├── half_subtractor.py
-│   ├── full_subtractor.py
-│   └── multiplier.py
 │
-└── verification/
-    └── verifier.py
+├── outputs/
+│    ├── standard_circuits_images/
+│    ├── final_expression.py
+│    └── standard_circuits_diagrmas.py
 ```
 
 ---
