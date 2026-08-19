@@ -7,6 +7,44 @@ type InputKind = "Boolean expression" | "Truth table" | "Minterms / Maxterms";
 type GateMode = "AND, OR & NOT" | "NAND only" | "NOR only";
 type CircuitOperation = "Half adder" | "Full adder" | "Half subtractor" | "Full subtractor" | "3-bit multiplier";
 
+type LogicResponse = {
+  problem: string;
+  ai: {
+    inputs: string[];
+    outputs: string[];
+    expression: string;
+    explanation: string;
+  };
+  logic: {
+    expression: string;
+    variables: string[];
+    variable_count: number;
+    truth_table: Record<string, number>[];
+    minterms: number[];
+    maxterms: number[];
+    dont_care_terms: number[];
+    canonical_sop: string;
+    canonical_pos: string;
+    simplified_sop: string;
+    simplified_pos: string;
+    implementation: {
+      gates: string;
+      fan_in: number;
+      gate_count: number;
+      realized_as: string;
+    };
+    circuit: {
+      nodes: { id: string; type: string; inputs: string[] }[];
+      edges: { source: string; target: string }[];
+      output: string;
+      image: string | null;
+      constant_value: number | null;
+    };
+    verified: boolean;
+  };
+};
+
+
 const inputHelp: Record<InputKind, { title: string; placeholder: string; helper: string }> = {
   "Boolean expression": { title: "Enter your Boolean expression", placeholder: "e.g. A'B + AC + BC'", helper: "Use + for OR, adjacency for AND, and ' for NOT." },
   "Truth table": { title: "Paste or build a truth table", placeholder: "A  B  C  |  F\n0  0  0  |  0\n0  0  1  |  1", helper: "Use columns for each variable and one output column." },
@@ -147,6 +185,9 @@ export default function Home() {
   const [generated, setGenerated] = useState(false);
   const [copied, setCopied] = useState(false);
   const [dark, setDark] = useState(false);
+  const [result, setResult] = useState<LogicResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const cursorRef = useRef<HTMLDivElement>(null);
   const glowRef = useRef<HTMLDivElement>(null);
   const help = inputHelp[kind];
@@ -178,9 +219,65 @@ export default function Home() {
     });
   }
 
-  function switchKind(next: InputKind) { setKind(next); setValue(""); setGenerated(false); }
-  function generate() { setGenerated(true); setCopied(false); }
-  function copyExpression() { navigator.clipboard?.writeText("A'B + AC"); setCopied(true); }
+  function switchKind(next: InputKind) {
+    setKind(next);
+    setValue("");
+    setGenerated(false);
+    setResult(null);
+    setError(null);
+  }
+
+  async function generate() {
+    if (!value.trim()) return;
+
+    setLoading(true);
+    setError(null);
+    setGenerated(false);
+
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+      const response = await fetch(`${apiUrl}/api/logic/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          problem: value.trim(),
+          input_type: kind,
+          gate_mode: mode,
+        }),
+      });
+
+      if (!response.ok) {
+        let message = `Request failed with status ${response.status}`;
+        try {
+          const errorData = await response.json();
+          if (typeof errorData?.detail === "string") message = errorData.detail;
+        } catch {}
+        throw new Error(message);
+      }
+
+      const data: LogicResponse = await response.json();
+      setResult(data);
+      setGenerated(true);
+      setCopied(false);
+    } catch (err) {
+      console.error("Logic generation failed:", err);
+      setError(err instanceof Error ? err.message : "Failed to generate logic design.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function copyExpression() {
+    const expression = result?.logic.simplified_sop || result?.logic.expression || "";
+    if (!expression) return;
+    try {
+      await navigator.clipboard?.writeText(expression);
+      setCopied(true);
+    } catch (err) {
+      console.error("Failed to copy expression:", err);
+    }
+  }
   return <main className={`${dark ? "dark" : ""} custom-cursor colorful-ui relative min-h-screen overflow-hidden bg-paper transition-colors duration-300`}>
     <ParticleField dark={dark} />
     <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true"><div className="circuit-grid absolute inset-0" /><div ref={glowRef} className="ambient-orb ambient-orb-cursor" /><div className="ambient-orb ambient-orb-one" /><div className="ambient-orb ambient-orb-two" /><div className="ambient-orb ambient-orb-three" /><div className="color-ribbon color-ribbon-one" /><div className="color-ribbon color-ribbon-two" /></div>
@@ -208,12 +305,154 @@ export default function Home() {
           <div className="mt-6 flex items-end justify-between gap-4"><div><label className="block text-sm font-semibold text-slate-700">{help.title}</label><p className="mt-1 text-xs text-slate-500">{help.helper}</p></div><span className="hidden rounded-md bg-slate-100 px-2 py-1 font-mono text-[10px] text-slate-500 sm:block">INPUT</span></div>
           <textarea value={value} onChange={(event) => { setValue(event.target.value); setGenerated(false); }} placeholder={help.placeholder} className="mt-3 min-h-32 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 p-4 font-mono text-sm leading-6 text-ink outline-none transition placeholder:text-slate-400 focus:border-cyan focus:bg-white focus:ring-4 focus:ring-cyan/10" />
           <div className="mt-6 border-t border-slate-100 pt-5"><p className="text-sm font-bold text-cyan">02 / IMPLEMENT</p><h3 className="mt-1 text-base font-bold">Choose a gate family</h3><div className="mt-3 grid gap-2 sm:grid-cols-3">{modes.map((item) => <button key={item.name} onClick={() => { setMode(item.name); setGenerated(false); }} className={`rounded-xl border p-3 text-left transition ${mode === item.name ? "border-cyan bg-cyan/5 ring-1 ring-cyan" : "border-slate-200 hover:border-slate-300"}`}><span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${mode === item.name ? "bg-cyan text-white" : "bg-slate-100 text-slate-500"}`}>{item.tag}</span><p className="mt-2 text-sm font-bold">{item.name}</p><p className="mt-0.5 text-xs text-slate-500">{item.description}</p></button>)}</div></div>
-          <button onClick={generate} disabled={!value.trim()} className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-coral via-pink to-violet px-5 py-4 text-sm font-bold text-white shadow-lg shadow-pink/20 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"><span>Generate logic design</span><span aria-hidden>→</span></button>
+          <button onClick={generate} disabled={!value.trim() || loading} className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-coral via-pink to-violet px-5 py-4 text-sm font-bold text-white shadow-lg shadow-pink/20 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40">
+            <span>{loading ? "Generating..." : "Generate logic design"}</span>
+            <span aria-hidden>{loading ? "⟳" : "→"}</span>
+          </button>
+          {error && (
+            <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm leading-5 text-red-600">
+              {error}
+            </div>
+          )}
         </motion.div>
 
         <motion.div initial={{ opacity: 0, x: 15 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.18 }} className="color-card color-card-pink relative overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-panel">
           <div className="flex items-center justify-between border-b border-slate-100 px-5 py-5 sm:px-7"><div><p className="text-sm font-bold text-cyan">03 / RESULTS</p><h2 className="mt-1 text-xl font-bold">Logic implementation</h2></div>{generated && <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-600">Generated</span>}</div>
-          <AnimatePresence mode="wait">{generated ? <motion.div key="result" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="p-5 sm:p-7"><div className="rounded-2xl bg-ink p-5 text-white"><div className="flex items-center justify-between"><p className="text-xs font-bold uppercase tracking-wider text-cyan">Simplified expression</p><button onClick={copyExpression} className="rounded-md bg-white/10 px-2.5 py-1 text-xs transition hover:bg-white/20">{copied ? "Copied" : "Copy"}</button></div><p className="mt-5 font-mono text-2xl font-medium tracking-wide">A&apos;B + AC</p><p className="mt-2 text-xs text-slate-400">Minimized sum-of-products form</p></div><div className="mt-5 grid gap-3 sm:grid-cols-2"><div className="rounded-xl border border-slate-200 p-3"><p className="text-xs font-bold text-slate-700">Generated truth table</p><div className="mt-2 grid grid-cols-4 gap-px overflow-hidden rounded-md bg-slate-200 text-center font-mono text-[10px]"><span className="bg-slate-100 p-1">A</span><span className="bg-slate-100 p-1">B</span><span className="bg-slate-100 p-1">C</span><span className="bg-cyan/10 p-1 font-bold">F</span>{["0","0","0","0","0","0","1","1","0","1","0","1","1","1","1","1"].map((cell, i) => <span key={i} className="bg-white p-1">{cell}</span>)}</div></div><div className="rounded-xl border border-slate-200 p-3"><p className="text-xs font-bold text-slate-700">Implementation</p><p className="mt-2 text-sm font-bold text-violet">{mode}</p><p className="mt-1 text-xs leading-5 text-slate-500">Gate netlist and diagram supplied by your synthesis service.</p></div></div><div className="mt-5 flex items-center justify-between"><div><p className="text-sm font-bold">Circuit preview</p><p className="text-xs text-slate-500">{mode} implementation</p></div><button className="text-sm font-bold text-violet hover:underline">Open diagram ↗</button></div><div className="grid-dots mt-3 h-64 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-4"><CircuitPreview mode={mode} /></div><div className="mt-5 grid grid-cols-3 gap-2 text-center"><div className="rounded-xl bg-slate-50 p-3"><p className="text-lg font-bold">3</p><p className="text-[11px] text-slate-500">Variables</p></div><div className="rounded-xl bg-slate-50 p-3"><p className="text-lg font-bold">2</p><p className="text-[11px] text-slate-500">Gate levels</p></div><div className="rounded-xl bg-slate-50 p-3"><p className="text-lg font-bold">4</p><p className="text-[11px] text-slate-500">Gates used</p></div></div></motion.div> : <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="grid min-h-[530px] place-items-center p-8 text-center"><div><div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-violet/10 text-3xl text-violet">⌘</div><h3 className="mt-5 text-lg font-bold">Your design will appear here</h3><p className="mx-auto mt-2 max-w-xs text-sm leading-6 text-slate-500">Enter a logic problem, pick a gate family, then generate to see the simplified result and circuit diagram.</p><div className="mx-auto mt-7 flex max-w-xs items-center gap-2 text-left text-xs text-slate-500"><span className="grid h-6 w-6 place-items-center rounded-full bg-cyan text-white">1</span><span>Input</span><span className="h-px flex-1 bg-slate-200" /><span className="grid h-6 w-6 place-items-center rounded-full bg-slate-200">2</span><span>Generate</span></div></div></motion.div>}</AnimatePresence>
+          <AnimatePresence mode="wait">
+            {generated && result ? (
+              <motion.div key="result" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="p-5 sm:p-7">
+                <div className="rounded-2xl bg-ink p-5 text-white">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs font-bold uppercase tracking-wider text-cyan">Simplified expression</p>
+                    <button onClick={copyExpression} className="rounded-md bg-white/10 px-2.5 py-1 text-xs transition hover:bg-white/20">
+                      {copied ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                  <p className="mt-5 break-words font-mono text-2xl font-medium tracking-wide">{result.logic.simplified_sop}</p>
+                  <p className="mt-2 text-xs text-slate-400">Minimized sum-of-products form</p>
+                </div>
+
+                <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-xl border border-slate-200 p-3">
+                    <p className="text-xs font-bold text-slate-700">Generated truth table</p>
+                    <div className="mt-2 overflow-hidden rounded-md border border-slate-200">
+                      <table className="w-full text-center font-mono text-[10px]">
+                        <thead>
+                          <tr className="bg-slate-100">
+                            {result.logic.variables.map((variable) => <th key={variable} className="p-1.5">{variable}</th>)}
+                            {result.ai.outputs.map((output) => <th key={output} className="bg-cyan/10 p-1.5 font-bold">{output}</th>)}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {result.logic.truth_table.map((row, index) => (
+                            <tr key={index} className="border-t border-slate-100">
+                              {result.logic.variables.map((variable) => <td key={variable} className="bg-white p-1.5">{row[variable]}</td>)}
+                              {result.ai.outputs.map((output) => <td key={output} className="bg-cyan/5 p-1.5 font-bold">{row[output]}</td>)}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 p-3">
+                    <p className="text-xs font-bold text-slate-700">Implementation</p>
+                    <p className="mt-2 text-sm font-bold text-violet">{result.logic.implementation.gates}</p>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">{result.logic.implementation.realized_as}</p>
+                    <div className="mt-3 space-y-1 text-xs text-slate-500">
+                      <p>Fan-in: {result.logic.implementation.fan_in}</p>
+                      <p>Gates: {result.logic.implementation.gate_count}</p>
+                      <p>Verified: <span className={result.logic.verified ? "font-bold text-emerald-600" : "font-bold text-red-500"}>{result.logic.verified ? "Yes" : "No"}</span></p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs font-bold text-slate-700">AI explanation</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">{result.ai.explanation}</p>
+                </div>
+
+                <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-xl border border-slate-200 p-3">
+                    <p className="text-xs font-bold text-slate-700">Canonical SOP</p>
+                    <p className="mt-2 break-words font-mono text-xs text-slate-600">{result.logic.canonical_sop}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 p-3">
+                    <p className="text-xs font-bold text-slate-700">Canonical POS</p>
+                    <p className="mt-2 break-words font-mono text-xs text-slate-600">{result.logic.canonical_pos}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 p-3">
+                    <p className="text-xs font-bold text-slate-700">Simplified POS</p>
+                    <p className="mt-2 break-words font-mono text-xs text-slate-600">{result.logic.simplified_pos}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 p-3">
+                    <p className="text-xs font-bold text-slate-700">Minterms / Maxterms</p>
+                    <p className="mt-2 font-mono text-xs text-slate-600">Σm({result.logic.minterms.join(", ")})</p>
+                    <p className="mt-1 font-mono text-xs text-slate-600">ΠM({result.logic.maxterms.join(", ")})</p>
+                  </div>
+                </div>
+
+                <div className="mt-5 flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-bold">Circuit preview</p>
+                    <p className="text-xs text-slate-500">{mode} implementation</p>
+                  </div>
+                  {result.logic.circuit.image && (
+                    <a
+                      href={`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}${result.logic.circuit.image}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-sm font-bold text-violet hover:underline"
+                    >
+                      Open diagram ↗
+                    </a>
+                  )}
+                </div>
+
+                <div className="grid-dots mt-3 flex h-64 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  {result.logic.circuit.image ? (
+                    <img
+                      src={`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}${result.logic.circuit.image}`}
+                      alt="Generated logic circuit"
+                      className="h-full w-full object-contain"
+                    />
+                  ) : (
+                    <CircuitPreview mode={mode} />
+                  )}
+                </div>
+
+                <div className="mt-5 grid grid-cols-3 gap-2 text-center">
+                  <div className="rounded-xl bg-slate-50 p-3">
+                    <p className="text-lg font-bold">{result.logic.variable_count}</p>
+                    <p className="text-[11px] text-slate-500">Variables</p>
+                  </div>
+                  <div className="rounded-xl bg-slate-50 p-3">
+                    <p className="text-lg font-bold">{result.logic.implementation.fan_in}</p>
+                    <p className="text-[11px] text-slate-500">Fan-in</p>
+                  </div>
+                  <div className="rounded-xl bg-slate-50 p-3">
+                    <p className="text-lg font-bold">{result.logic.implementation.gate_count}</p>
+                    <p className="text-[11px] text-slate-500">Gates used</p>
+                  </div>
+                </div>
+              </motion.div>
+            ) : (
+              <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="grid min-h-[530px] place-items-center p-8 text-center">
+                <div>
+                  <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-violet/10 text-3xl text-violet">⌘</div>
+                  <h3 className="mt-5 text-lg font-bold">Your design will appear here</h3>
+                  <p className="mx-auto mt-2 max-w-xs text-sm leading-6 text-slate-500">Enter a logic problem, pick a gate family, then generate to see the simplified result and circuit diagram.</p>
+                  <div className="mx-auto mt-7 flex max-w-xs items-center gap-2 text-left text-xs text-slate-500">
+                    <span className="grid h-6 w-6 place-items-center rounded-full bg-cyan text-white">1</span>
+                    <span>Input</span>
+                    <span className="h-px flex-1 bg-slate-200" />
+                    <span className="grid h-6 w-6 place-items-center rounded-full bg-slate-200">2</span>
+                    <span>Generate</span>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </motion.div>
       </div>
     </section>
