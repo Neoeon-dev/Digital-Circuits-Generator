@@ -683,9 +683,11 @@ export default function Home() {
     setGenerated(false);
 
     try {
-      const apiUrl =
+      // Normalize the API base URL so we never create malformed URLs.
+      const apiUrl = (
         process.env.NEXT_PUBLIC_API_URL ||
-        "http://localhost:8000";
+        "https://digital-circuits-generator-3.onrender.com"
+      ).replace(/\/+$/, "");
 
       let endpoint = "/api/logic/generate";
       let body: Record<string, unknown>;
@@ -783,8 +785,16 @@ export default function Home() {
         };
       }
 
+      const fullUrl = `${apiUrl}${endpoint}`;
+
+      console.log("[LogicFlow] API request:", {
+        url: fullUrl,
+        method: "POST",
+        inputType: kind,
+      });
+
       const response = await fetch(
-        `${apiUrl}${endpoint}`,
+        fullUrl,
         {
           method: "POST",
           headers: {
