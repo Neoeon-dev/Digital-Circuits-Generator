@@ -46,6 +46,13 @@ type LogicResponse = {
   };
 };
 
+// Single source of truth for the backend base URL. Everything that talks to
+// the API (the main generate() call and the "open source image" link) reads
+// from this constant, so it can never drift out of sync again.
+const API_BASE_URL = (
+  process.env.NEXT_PUBLIC_API_URL ||
+  "https://digital-circuits-generator-3.onrender.com"
+).replace(/\/+$/, "");
 
 const inputHelp: Record<InputKind, { title: string; placeholder: string; helper: string }> = {
   "Statement": {
@@ -683,12 +690,6 @@ export default function Home() {
     setGenerated(false);
 
     try {
-      // Normalize the API base URL so we never create malformed URLs.
-      const apiUrl = (
-        process.env.NEXT_PUBLIC_API_URL ||
-        "https://digital-circuits-generator-3.onrender.com"
-      ).replace(/\/+$/, "");
-
       let endpoint = "/api/logic/generate";
       let body: Record<string, unknown>;
 
@@ -785,7 +786,7 @@ export default function Home() {
         };
       }
 
-      const fullUrl = `${apiUrl}${endpoint}`;
+      const fullUrl = `${API_BASE_URL}${endpoint}`;
 
       console.log("[LogicFlow] API request:", {
         url: fullUrl,
@@ -838,11 +839,23 @@ export default function Home() {
         err
       );
 
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Failed to generate logic design."
-      );
+      // A TypeError from fetch() (as opposed to an Error we threw ourselves
+      // above) means the request never reached the server at all: a CORS
+      // rejection, DNS failure, or a Render free-tier instance that's
+      // asleep and taking too long to cold-start. Surface that distinction
+      // instead of a generic message, since it's the difference between
+      // "wait a bit and retry" and "fix the backend's CORS config."
+      if (err instanceof TypeError) {
+        setError(
+          "Couldn't reach the backend. If it's been idle, Render's free tier can take up to a minute to wake up — try again shortly. If it still fails, check that the backend's CORS settings allow this site's origin."
+        );
+      } else {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Failed to generate logic design."
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -1028,7 +1041,7 @@ export default function Home() {
 
                     {result.logic.circuit.image && (
                       <a
-                        href={`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}${result.logic.circuit.image}`}
+                        href={`${API_BASE_URL}${result.logic.circuit.image}`}
                         target="_blank"
                         rel="noreferrer"
                         className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-violet transition hover:border-violet/30 hover:bg-violet/5"
