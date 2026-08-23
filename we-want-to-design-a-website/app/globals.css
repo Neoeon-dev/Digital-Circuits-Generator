@@ -1205,3 +1205,91 @@ html[data-logicflow-theme="light"], html[data-logicflow-theme="light"] body { ba
   }
 }
 
+/* =========================================================
+   LogicFlow — EXPORT CODE PREVIEWS
+   Force readable code in both light and dark themes.
+   This intentionally targets the actual export card preview,
+   not the separate implementation panel.
+   ========================================================= */
+
+/* Light theme: export previews */
+html[data-logicflow-theme="light"] .export-card pre,
+html[data-logicflow-theme="light"] .export-card pre code,
+html[data-logicflow-theme="light"] .export-card pre div,
+html[data-logicflow-theme="light"] .export-card pre span,
+.light .export-card pre,
+.light .export-card pre code,
+.light .export-card pre div,
+.light .export-card pre span {
+  background: #f8fafc !important;
+  color: #1e293b !important;
+  border-color: #e2e8f0 !important;
+  opacity: 1 !important;
+  filter: none !important;
+  text-shadow: none !important;
+}
+
+/* Keep the preview itself light even when utility classes specify a dark surface. */
+html[data-logicflow-theme="light"] .export-card pre,
+.light .export-card pre {
+  background-color: #f8fafc !important;
+  background-image: none !important;
+}
+
+/* Light-mode syntax coloring */
+html[data-logicflow-theme="light"] .export-card pre .comment,
+.light .export-card pre .comment {
+  color: #64748b !important;
+}
+
+html[data-logicflow-theme="light"] .export-card pre .keyword,
+.light .export-card pre .keyword {
+  color: #0891b2 !important;
+}
+
+html[data-logicflow-theme="light"] .export-card pre .string,
+.light .export-card pre .string {
+  color: #7c3aed !important;
+}
+
+html[data-logicflow-theme="light"] .export-card pre .number,
+.light .export-card pre .number {
+  color: #d97706 !important;
+}
+
+/* If the export renderer uses Tailwind utility classes directly,
+   these rules still force readable light-mode text. */
+html[data-logicflow-theme="light"] .export-card pre [class*="text-"],
+.light .export-card pre [class*="text-"] {
+  color: #1e293b !important;
+}
+
+html[data-logicflow-theme="light"] .export-card pre [class*="bg-"],
+.light .export-card pre [class*="bg-"] {
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+/* Preserve dark mode exactly as a readable dark code instrument. */
+html[data-logicflow-theme="dark"] .export-card pre,
+html[data-logicflow-theme="dark"] .export-card pre code,
+html[data-logicflow-theme="dark"] .export-card pre div,
+html[data-logicflow-theme="dark"] .export-card pre span,
+.dark .export-card pre,
+.dark .export-card pre code,
+.dark .export-card pre div,
+.dark .export-card pre span {
+  background: #040911 !important;
+  color: #e5eefb !important;
+  border-color: #1f3045 !important;
+  opacity: 1 !important;
+  filter: none !important;
+}
+
+/* Final safety net for export previews. */
+.export-card pre {
+  overflow: auto;
+  min-height: 58px;
+  border-radius: 12px;
+}
+
