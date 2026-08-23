@@ -43,7 +43,7 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "https://digital-circuits-generator-4.onrender.com",
-        "https://digital-circuits-generator.vercel.app/logic-solver"
+        "https://digital-circuits-generator.vercel.app"
 
         # Add your deployed Next.js frontend here later.
         # Example:
