@@ -1,5 +1,103 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#FFB000"/><stop offset=".55" stop-color="#FF6B58"/><stop offset="1" stop-color="#F04E98"/></linearGradient></defs>
-  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#g)"/>
-  <path d="M18 18h8v28h-8zM27 18h17v7H27zM27 29h13v7H27zM27 39h17v7H27z" fill="#fff"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" width="900" height="700">
+  <title>Dagger and Moon Logo</title>
+  <desc>Minimal black and white vector illustration of a dagger crossing a black circular moon with white sparkles.</desc>
+
+  <!-- Transparent background -->
+
+  <!-- Moon -->
+  <circle cx="450" cy="350" r="230" fill="#000"/>
+
+  <!-- Sparkles -->
+  <g fill="#fff">
+    <path d="M300 210 C304 228 316 244 334 250 C316 256 304 272 300 290 C296 272 284 256 266 250 C284 244 296 228 300 210Z"/>
+    <path d="M420 145 C423 158 432 169 445 173 C432 177 423 188 420 201 C417 188 408 177 395 173 C408 169 417 158 420 145Z"/>
+    <path d="M590 310 C594 326 605 337 621 341 C605 345 594 356 590 372 C586 356 575 345 559 341 C575 337 586 326 590 310Z"/>
+    <path d="M500 420 C504 438 516 452 534 457 C516 462 504 476 500 494 C496 476 484 462 466 457 C484 452 496 438 500 420Z"/>
+  </g>
+
+  <!-- Dagger -->
+  <g transform="rotate(-37 450 350)"
+     stroke="#000"
+     stroke-width="6"
+     stroke-linejoin="round"
+     stroke-linecap="round">
+
+    <!-- Double-edged blade -->
+    <path d="M350 294
+             L735 294
+             L790 320
+             L735 346
+             L350 346
+             L375 320
+             Z"
+          fill="#fff"/>
+
+    <!-- Central fuller -->
+    <path d="M385 320 L740 320"
+          fill="none"
+          stroke="#000"
+          stroke-width="5"/>
+
+    <!-- Symmetrical blade facets -->
+    <path d="M375 309 L735 309 L770 320 L735 331 L375 331 Z"
+          fill="#fff"
+          stroke-width="4"/>
+
+    <!-- Dagger blade ridge -->
+    <path d="M410 320 L742 320"
+          fill="none"
+          stroke="#000"
+          stroke-width="3"/>
+
+    <!-- Dagger guard -->
+    <path d="M350 282
+             C333 287 315 296 299 307
+             L287 320
+             L299 333
+             C315 344 333 353 350 358
+             L367 344
+             C354 334 347 327 347 320
+             C347 313 354 306 367 296
+             Z"
+          fill="#fff"/>
+
+    <!-- Guard inner cut -->
+    <path d="M348 296
+             C334 306 325 313 325 320
+             C325 327 334 334 348 344"
+          fill="none"
+          stroke-width="5"/>
+
+    <!-- Grip -->
+    <path d="M299 307
+             L145 307
+             C130 307 120 312 120 320
+             C120 328 130 333 145 333
+             L299 333
+             Z"
+          fill="#fff"/>
+
+    <!-- Grip wrapping -->
+    <g stroke-width="5">
+      <path d="M148 307 L163 333"/>
+      <path d="M171 307 L186 333"/>
+      <path d="M194 307 L209 333"/>
+      <path d="M217 307 L232 333"/>
+      <path d="M240 307 L255 333"/>
+      <path d="M263 307 L278 333"/>
+    </g>
+
+    <!-- Pommel -->
+    <path d="M120 311
+             L103 316
+             L96 320
+             L103 324
+             L120 329
+             Z"
+          fill="#fff"/>
+
+    <!-- Collar -->
+    <path d="M299 307 L286 311 L286 329 L299 333 Z"
+          fill="#fff"/>
+  </g>
 </svg>
