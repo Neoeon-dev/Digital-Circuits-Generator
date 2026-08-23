@@ -1,0 +1,136 @@
+"use client";
+
+import { motion } from "framer-motion";
+import { useMemo, useState } from "react";
+
+type Node = { id: string; type: string; inputs: string[] };
+type Edge = { source: string; target: string };
+type Circuit = { nodes: Node[]; edges: Edge[]; output: string };
+type Props = { circuit: Circuit; variables: string[]; probe: Record<string, number>; outputs: string[] };
+type Point = { x: number; y: number };
+
+function gateOp(type: string, inputs: number[]) {
+  const name = type.toUpperCase();
+  if (name === "NOT") return inputs[0] ? 0 : 1;
+  if (name === "AND") return inputs.every(Boolean) ? 1 : 0;
+  if (name === "OR") return inputs.some(Boolean) ? 1 : 0;
+  if (name === "XOR" || name === "XNOR") {
+    const parity = inputs.reduce((sum, value) => sum ^ value, 0);
+    return name === "XOR" ? parity : Number(!parity);
+  }
+  if (name === "NAND") return inputs.every(Boolean) ? 0 : 1;
+  if (name === "NOR") return inputs.some(Boolean) ? 0 : 1;
+  return inputs[0] ?? 0;
+}
+
+function gateGeometry(type: string) {
+  const name = type.toUpperCase();
+  if (name === "AND" || name === "NAND") return "M -54 -30 H -16 A 30 30 0 0 1 -16 30 H -54 Z";
+  if (name === "OR" || name === "NOR" || name === "XOR" || name === "XNOR") return "M -54 -30 Q -32 0 -54 30 Q 8 30 48 0 Q 8 -30 -54 -30 Z";
+  return "M -45 -28 H 18 Q 50 -28 50 0 Q 50 28 18 28 H -45 Z";
+}
+
+function gateAccent(type: string) {
+  const name = type.toUpperCase();
+  if (name === "NAND" || name === "NOR" || name === "XNOR") return "violet";
+  if (name === "XOR") return "pink";
+  if (name === "NOT") return "amber";
+  return "cyan";
+}
+
+function route(source: Point, target: Point, laneX: number) {
+  const sx = source.x;
+  const tx = target.x;
+  const safeLane = Math.max(sx + 22, Math.min(tx - 22, laneX));
+  return `M ${sx} ${source.y} H ${safeLane} V ${target.y} H ${tx}`;
+}
+
+export default function AnimatedCircuit({ circuit, variables, probe, outputs }: Props) {
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+
+  const incoming = useMemo(() => {
+    const map = new Map<string, string[]>();
+    circuit.edges.forEach((edge) => map.set(edge.target, [...(map.get(edge.target) ?? []), edge.source]));
+    return map;
+  }, [circuit.edges]);
+
+  const values = useMemo(() => {
+    const cache = new Map<string, number>();
+    const active = new Set<string>();
+    const resolve = (id: string): number => {
+      if (id in probe) return probe[id] ?? 0;
+      if (cache.has(id)) return cache.get(id)!;
+      if (active.has(id)) return 0;
+      active.add(id);
+      const node = circuit.nodes.find((item) => item.id === id);
+      if (!node) { active.delete(id); return 0; }
+      const next = gateOp(node.type, (incoming.get(id) ?? []).map(resolve));
+      cache.set(id, next);
+      active.delete(id);
+      return next;
+    };
+    circuit.nodes.forEach((node) => resolve(node.id));
+    return cache;
+  }, [circuit, incoming, probe]);
+
+  const layout = useMemo(() => {
+    const depth = new Map<string, number>();
+    const visiting = new Set<string>();
+    const visit = (id: string): number => {
+      if (depth.has(id)) return depth.get(id)!;
+      if (visiting.has(id)) return 1;
+      visiting.add(id);
+      const parents = (incoming.get(id) ?? []).filter((source) => circuit.nodes.some((node) => node.id === source));
+      const d = parents.length ? Math.max(...parents.map(visit)) + 1 : 1;
+      depth.set(id, d);
+      visiting.delete(id);
+      return d;
+    };
+    circuit.nodes.forEach((node) => visit(node.id));
+    const maxDepth = Math.max(1, ...depth.values());
+    const columns = Array.from({ length: maxDepth }, (_, index) => circuit.nodes.filter((node) => depth.get(node.id) === index + 1));
+    const height = Math.max(430, ...columns.map((column) => column.length * 130 + 110));
+    const width = Math.max(1020, 300 + maxDepth * 250);
+    const nodes = new Map<string, Point>();
+    columns.forEach((column, columnIndex) => {
+      const gap = height / (column.length + 1);
+      column.forEach((node, rowIndex) => nodes.set(node.id, { x: 170 + columnIndex * 250, y: gap * (rowIndex + 1) }));
+    });
+    const inputs = new Map<string, number>();
+    variables.forEach((name, index) => {
+      const target = circuit.edges.find((edge) => edge.source === name)?.target;
+      const targetPoint = target ? nodes.get(target) : undefined;
+      inputs.set(name, targetPoint?.y ?? (height / (variables.length + 1)) * (index + 1));
+    });
+    return { nodes, inputs, width, height };
+  }, [circuit, incoming, variables]);
+
+  const edgeValue = (edge: Edge) => probe[edge.source] ?? values.get(edge.source) ?? 0;
+  const output = values.get(circuit.output) ?? 0;
+  const outputNode = layout.nodes.get(circuit.output);
+
+  return <div className="logic-canvas-wrap">
+    <div className="logic-canvas-toolbar"><span>LIVE GATE SCHEMATIC · ROUTED CHANNELS</span><div className="logic-canvas-actions"><button type="button" onClick={() => setZoom((z) => Math.min(1.7, +(z + 0.1).toFixed(2)))}>＋</button><button type="button" onClick={() => setZoom((z) => Math.max(.55, +(z - 0.1).toFixed(2)))}>−</button><button type="button" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}>Reset</button></div></div>
+    <div className={"logic-canvas-scroll" + (dragging ? " is-dragging" : "")} onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); setDragging(true); setDragStart({ x: event.clientX - pan.x, y: event.clientY - pan.y }); }} onPointerMove={(event) => { if (dragging) setPan({ x: event.clientX - dragStart.x, y: event.clientY - dragStart.y }); }} onPointerUp={() => setDragging(false)} onPointerCancel={() => setDragging(false)}>
+      <svg viewBox={`0 0 ${layout.width} ${layout.height}`} style={{ width: layout.width * zoom, height: layout.height * zoom, maxWidth: "none", transform: `translate(${pan.x}px, ${pan.y}px)` }} role="img" aria-label="Generated logic circuit">
+        <defs><filter id="lfGateGlow"><feGaussianBlur stdDeviation="5" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+        {circuit.edges.map((edge, index) => {
+          const sourceNode = layout.nodes.get(edge.source);
+          const targetNode = layout.nodes.get(edge.target);
+          const source = sourceNode ? { x: sourceNode.x + 54, y: sourceNode.y } : { x: 48, y: layout.inputs.get(edge.source) ?? layout.height / 2 };
+          const target = targetNode ? { x: targetNode.x - 54, y: targetNode.y + ((targetNode.y % 3) - 1) * 8 } : { x: layout.width - 140, y: layout.height / 2 };
+          const laneX = source.x + (target.x - source.x) * 0.48 + ((index % 5) - 2) * 20;
+          const high = Boolean(edgeValue(edge));
+          return <g key={`${edge.source}-${edge.target}-${index}`}><path d={route(source, target, laneX)} className={high ? "logic-wire-active" : "logic-wire"}/>{high && <circle r="4" className="signal-traveller"><animateMotion dur="1.2s" repeatCount="indefinite" path={route(source, target, laneX)} /></circle>}<circle cx={laneX} cy={source.y} r="3.2" className={high ? "logic-junction-high" : "logic-junction-low"}/></g>;
+        })}
+        {variables.map((variable) => { const y = layout.inputs.get(variable) ?? layout.height / 2; const high = Boolean(probe[variable]); return <g key={variable}><circle cx="40" cy={y} r="8" className={high ? "logic-pin-high" : "logic-pin-low"}/><text x="56" y={y + 5} className="logic-label">{variable} = {high ? 1 : 0}</text></g>; })}
+        {circuit.nodes.map((node) => { const pos = layout.nodes.get(node.id); if (!pos) return null; const high = Boolean(values.get(node.id)); const accent = gateAccent(node.type); const geometry = gateGeometry(node.type); const bubble = ["NAND", "NOR", "XNOR"].includes(node.type.toUpperCase()); return <motion.g key={node.id} transform={`translate(${pos.x} ${pos.y})`} animate={high ? { scale: 1.035 } : { scale: 1 }} transition={{ duration: .18 }} filter={high ? "url(#lfGateGlow)" : undefined}><path d={geometry} className={`logic-real-gate ${accent} ${high ? "is-high" : ""}`}/>{bubble && <circle cx="53" cy="0" r="5" className="logic-invert-bubble"/>}<text x="-3" y="4" textAnchor="middle" className="logic-gate-title">{node.type.toUpperCase()}</text><text x="0" y="23" textAnchor="middle" className="logic-gate-id">{node.id}</text>{high && <circle cx="0" cy="-39" r="4.5" className="logic-gate-indicator"/>}</motion.g>; })}
+        {outputNode && <><path d={`M ${outputNode.x + 55} ${outputNode.y} H ${layout.width - 132}`} className={output ? "logic-wire-active" : "logic-wire"}/><circle cx={layout.width - 105} cy={outputNode.y} r="11" className={output ? "logic-output-high" : "logic-output-low"}/><text x={layout.width - 85} y={outputNode.y + 5} className="logic-label">{outputs[0] || "F"} = {output}</text></>}
+      </svg>
+    </div>
+    <div className="logic-status-row"><span><i className="dot high"/> HIGH signals glow and move through separated routed channels</span><span>Output: <strong>{output}</strong></span></div>
+  </div>;
+}

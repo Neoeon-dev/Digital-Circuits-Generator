@@ -1,0 +1,3 @@
+LogicFlow v7 keeps the existing Next.js/Tailwind/Framer Motion stack.
+No new runtime dependency is required.
+Tailwind content paths now include both app/**/* and components/**/*.
