@@ -273,6 +273,7 @@ const navItems = [
   ["/logic-solver", "02", "Logic Solver"],
   ["/circuit-lab", "03", "Circuit Lab"],
   ["/seven-segment", "04", "8-Segment"],
+  ["/canvas", "05", "Canvas"],
 ] as const;
 
 export default function StudioShell({

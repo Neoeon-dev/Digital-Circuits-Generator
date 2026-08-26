@@ -2,21 +2,29 @@
 
 import { useMemo, useRef, useState } from "react";
 
-type Node = {
+// -----------------------------------------------------------------------------
+// Backend circuit shape used by LogicSolver.
+// The backend may omit `output`, so this renderer deliberately treats it as
+// optional and infers the output from graph sinks when needed.
+// -----------------------------------------------------------------------------
+
+type BackendNode = {
   id: string;
   type: string;
-  inputs: string[];
+  inputs?: string[];
 };
 
-type Edge = {
+type BackendEdge = {
   source: string;
   target: string;
 };
 
 type Circuit = {
-  nodes: Node[];
-  edges: Edge[];
-  output: string;
+  nodes: BackendNode[];
+  edges?: BackendEdge[];
+  output?: string | null;
+  image?: string | null;
+  constant_value?: number | null;
 };
 
 type Props = {
@@ -26,53 +34,74 @@ type Props = {
   outputs: string[];
 };
 
-type Point = {
-  x: number;
-  y: number;
-};
+type Point = { x: number; y: number };
 
-type Segment = {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  horizontal: boolean;
+type NormalizedEdge = {
+  id: string;
+  source: string;
+  target: string;
+  slot: number;
 };
 
 type Layout = {
   width: number;
   height: number;
   nodes: Map<string, Point>;
-  inputPins: Map<string, Point>;
   sourcePins: Map<string, Point>;
-  targetPins: Map<number, Point>;
-  lanes: Map<number, number>;
+  targetPins: Map<string, Point>;
+  inputPins: Map<string, Point>;
+  outputPins: Map<string, Point>;
 };
 
+const CANVAS_W = 1400;
+const MIN_CANVAS_H = 680;
+const GATE_W = 150;
+const GATE_H = 96;
+const INPUT_W = 132;
+const INPUT_H = 72;
+const OUTPUT_W = 132;
+const OUTPUT_H = 72;
+
+const GATE_TYPES = new Set([
+  "AND",
+  "OR",
+  "NOT",
+  "NAND",
+  "NOR",
+  "XOR",
+  "XNOR",
+]);
+
 function upper(type: string) {
-  return type.toUpperCase();
+  return type.trim().toUpperCase();
 }
 
-function gateSize(type: string) {
+function isInputNode(node: BackendNode) {
+  return upper(node.type) === "INPUT";
+}
+
+function isOutputNode(node: BackendNode) {
+  const type = upper(node.type);
+  return type === "OUTPUT" || type === "OUT";
+}
+
+function isGateNode(node: BackendNode) {
+  return GATE_TYPES.has(upper(node.type));
+}
+
+function gateInputCount(type: string, fallback = 2) {
   switch (upper(type)) {
     case "NOT":
-      return {
-        width: 78,
-        height: 60,
-      };
-
+      return 1;
+    case "AND":
+    case "OR":
+    case "NAND":
+    case "NOR":
     case "XOR":
     case "XNOR":
-      return {
-        width: 142,
-        height: 94,
-      };
-
+      return fallback;
     default:
-      return {
-        width: 126,
-        height: 92,
-      };
+      return fallback;
   }
 }
 
@@ -80,133 +109,349 @@ function evalGate(type: string, values: number[]) {
   switch (upper(type)) {
     case "NOT":
       return values[0] ? 0 : 1;
-
     case "AND":
       return values.length > 0 && values.every(Boolean) ? 1 : 0;
-
     case "OR":
       return values.some(Boolean) ? 1 : 0;
-
     case "NAND":
       return values.length > 0 && values.every(Boolean) ? 0 : 1;
-
     case "NOR":
       return values.some(Boolean) ? 0 : 1;
-
     case "XOR":
       return values.reduce((a, b) => a ^ b, 0);
-
     case "XNOR":
       return Number(!values.reduce((a, b) => a ^ b, 0));
-
     default:
       return values[0] ?? 0;
   }
 }
 
-function inputOffsets(count: number, height: number) {
-  if (count <= 1) return [0];
+function nodeWidth(node: BackendNode) {
+  if (isInputNode(node)) return INPUT_W;
+  if (isOutputNode(node)) return OUTPUT_W;
+  return GATE_W;
+}
 
-  const spread = Math.min(
-    height - 22,
-    Math.max(62, (count - 1) * 28)
-  );
+function nodeHeight(node: BackendNode) {
+  if (isInputNode(node) || isOutputNode(node)) return INPUT_H;
+  return GATE_H;
+}
 
+function inputOffset(slot: number, count: number) {
+  if (count <= 1) return 0;
+  const spread = Math.min(52, Math.max(44, (count - 1) * 24));
   const step = spread / (count - 1);
+  return -spread / 2 + slot * step;
+}
 
-  return Array.from(
-    { length: count },
-    (_, i) => -spread / 2 + i * step
+function gateInputPoint(
+  point: Point,
+  node: BackendNode,
+  slot: number,
+  count: number,
+): Point {
+  return {
+    x: point.x,
+    y: point.y + GATE_H / 2 + inputOffset(slot, count),
+  };
+}
+
+function gateOutputPoint(point: Point): Point {
+  return {
+    x: point.x + GATE_W,
+    y: point.y + GATE_H / 2,
+  };
+}
+
+function inputOutputPoint(point: Point, height: number, right = true): Point {
+  return {
+    x: point.x + (right ? INPUT_W : 0),
+    y: point.y + height / 2,
+  };
+}
+
+function normalizeCircuit(circuit: Circuit, variables: string[]) {
+  // The backend can describe primary inputs only in `variables` / node.inputs
+  // and omit physical INPUT nodes from circuit.nodes. Create virtual INPUT
+  // nodes so the same canvas renderer can connect them normally.
+  const backendNodes = circuit.nodes ?? [];
+  const existingIds = new Set(backendNodes.map((node) => node.id));
+  const virtualInputs: BackendNode[] = variables
+    .filter((variable) => variable.trim() && !existingIds.has(variable))
+    .map((variable) => ({
+      id: variable,
+      type: "INPUT",
+      inputs: [],
+    }));
+
+  const nodes = [...virtualInputs, ...backendNodes];
+  const explicitEdges = circuit.edges ?? [];
+  const validIds = new Set(nodes.map((node) => node.id));
+  const seen = new Set<string>();
+  const edges: NormalizedEdge[] = [];
+
+  // Keep explicit edges first.
+  explicitEdges.forEach((edge, index) => {
+    if (!validIds.has(edge.source) || !validIds.has(edge.target)) return;
+    const targetNode = nodes.find((node) => node.id === edge.target);
+    const targetInputs = targetNode?.inputs ?? [];
+    const matchedSlot = targetInputs.indexOf(edge.source);
+    const slot = matchedSlot >= 0 ? matchedSlot : index;
+    const key = `${edge.source}::${edge.target}::${slot}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    edges.push({
+      id: `e-explicit-${index}`,
+      source: edge.source,
+      target: edge.target,
+      slot,
+    });
+  });
+
+  // If an edge is missing, reconstruct it from target.inputs.
+  nodes.forEach((node) => {
+    (node.inputs ?? []).forEach((sourceId, slot) => {
+      if (!validIds.has(sourceId)) return;
+      const key = `${sourceId}::${node.id}::${slot}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      edges.push({
+        id: `e-input-${sourceId}-${node.id}-${slot}`,
+        source: sourceId,
+        target: node.id,
+        slot,
+      });
+    });
+  });
+
+  // Infer outputs when the backend omitted circuit.output.
+  const explicitOutput =
+    circuit.output && validIds.has(circuit.output)
+      ? circuit.output
+      : null;
+
+  const declaredOutputs = nodes.filter(isOutputNode);
+  const targets = new Set(edges.map((edge) => edge.target));
+  const inferredSinks = nodes.filter(
+    (node) => !isInputNode(node) && !targets.has(node.id),
   );
+
+  const outputIds = explicitOutput
+    ? [explicitOutput]
+    : declaredOutputs.length
+      ? declaredOutputs.map((node) => node.id)
+      : inferredSinks.length
+        ? inferredSinks.map((node) => node.id)
+        : nodes.filter((node) => !isInputNode(node)).slice(-1).map((node) => node.id);
+
+  return {
+    nodes,
+    edges,
+    outputIds,
+  };
 }
 
-function orthogonalSegments(
-  source: Point,
-  target: Point,
-  lane: number
-): Segment[] {
-  const horizontal = (
-    x: number,
-    y: number,
-    width: number
-  ): Segment => ({
-    x: Math.min(x, x + width),
-    y,
-    width: Math.abs(width),
-    height: 3,
-    horizontal: true,
+function resolveSignals(
+  nodes: BackendNode[],
+  edges: NormalizedEdge[],
+  variables: string[],
+  probe: Record<string, number>,
+) {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const incoming = new Map<string, NormalizedEdge[]>();
+
+  edges.forEach((edge) => {
+    const current = incoming.get(edge.target) ?? [];
+    current.push(edge);
+    incoming.set(edge.target, current);
   });
 
-  const vertical = (
-    x: number,
-    y: number,
-    height: number
-  ): Segment => ({
-    x,
-    y: Math.min(y, y + height),
-    width: 3,
-    height: Math.abs(height),
-    horizontal: false,
+  const inputIds = new Map<string, string>();
+  nodes.forEach((node) => {
+    if (isInputNode(node)) {
+      inputIds.set(node.id, node.id);
+      const cleanLabel = node.id.trim();
+      if (cleanLabel) inputIds.set(cleanLabel, node.id);
+    }
   });
 
-  const parts: Segment[] = [];
+  const values = new Map<string, number>();
+  const visiting = new Set<string>();
 
-  const first = lane - source.x;
-  const second = target.x - lane;
-
-  if (Math.abs(first) > 1) {
-    parts.push(
-      horizontal(source.x, source.y, first)
+  variables.forEach((variable) => {
+    const direct = nodes.find(
+      (node) => isInputNode(node) && node.id === variable,
     );
+    const labelled = nodes.find(
+      (node) => isInputNode(node) && upper(node.type) === "INPUT" && node.id === variable,
+    );
+    const node = direct ?? labelled;
+    if (node) {
+      values.set(node.id, Number(Boolean(probe[variable] ?? probe[node.id] ?? 0)));
+    }
+  });
+
+  function resolve(id: string): number {
+    if (values.has(id)) return values.get(id)!;
+    if (visiting.has(id)) return 0;
+
+    const node = nodeById.get(id);
+    if (!node) return 0;
+
+    if (isInputNode(node)) {
+      const value = Number(Boolean(probe[node.id] ?? 0));
+      values.set(id, value);
+      return value;
+    }
+
+    visiting.add(id);
+    const inputs = (incoming.get(id) ?? [])
+      .slice()
+      .sort((a, b) => a.slot - b.slot)
+      .map((edge) => resolve(edge.source));
+
+    let value = 0;
+    if (isOutputNode(node)) {
+      value = inputs[0] ?? 0;
+    } else if (isGateNode(node)) {
+      value = evalGate(node.type, inputs);
+    } else {
+      value = inputs[0] ?? 0;
+    }
+
+    visiting.delete(id);
+    values.set(id, value);
+    return value;
   }
 
-  if (Math.abs(target.y - source.y) > 1) {
-    parts.push(
-      vertical(
-        lane,
-        source.y,
-        target.y - source.y
-      )
-    );
-  }
+  nodes.forEach((node) => resolve(node.id));
 
-  if (Math.abs(second) > 1) {
-    parts.push(
-      horizontal(
-        lane,
-        target.y,
-        second
-      )
-    );
-  }
-
-  return parts;
+  return values;
 }
 
-function gateClass(type: string) {
-  switch (upper(type)) {
-    case "NOT":
-      return "not";
+function makeOrthogonalPath(source: Point, target: Point, bendX: number) {
+  return `M ${source.x} ${source.y} H ${bendX} V ${target.y} H ${target.x}`;
+}
 
-    case "OR":
-      return "or";
+function GateSvg({ type, high }: { type: string; high: boolean }) {
+  const label = upper(type);
+  const fill = high ? "#10332c" : "#0f1724";
+  const stroke = high ? "#34d399" : "#94a3b8";
+  const bubbleFill = high ? "#06251f" : "#0b1220";
+  const glow = high ? "url(#logicflow-wire-glow)" : undefined;
 
-    case "NOR":
-      return "or inverted";
+  const terminal = (y: number, key: string) => (
+    <circle
+      key={key}
+      cx="0"
+      cy={y}
+      r="3.8"
+      fill={high ? "#34d399" : "#22d3ee"}
+      stroke="#e2e8f0"
+      strokeOpacity="0.35"
+      strokeWidth="1.2"
+      filter={glow}
+    />
+  );
 
-    case "XOR":
-      return "xor";
+  const output = (
+    <circle
+      cx="150"
+      cy="48"
+      r="4.2"
+      fill={high ? "#34d399" : "#22d3ee"}
+      stroke="#e2e8f0"
+      strokeOpacity="0.4"
+      strokeWidth="1.2"
+      filter={glow}
+    />
+  );
 
-    case "XNOR":
-      return "xor inverted";
-
-    case "NAND":
-      return "and inverted";
-
-    case "AND":
-    default:
-      return "and";
+  if (label === "NOT") {
+    return (
+      <svg viewBox="0 0 150 96" width="150" height="96" aria-hidden="true" overflow="visible">
+        <line x1="0" y1="48" x2="16" y2="48" stroke={stroke} strokeWidth="3" strokeLinecap="round" />
+        {terminal(48, "in")}
+        <path
+          d="M 16 16 L 16 80 L 124 48 Z"
+          fill={fill}
+          stroke={stroke}
+          strokeWidth="2.6"
+          strokeLinejoin="round"
+          filter={glow}
+        />
+        <circle cx="132" cy="48" r="7" fill={bubbleFill} stroke={stroke} strokeWidth="2.4" />
+        <line x1="139" y1="48" x2="150" y2="48" stroke={stroke} strokeWidth="3" strokeLinecap="round" />
+        {output}
+      </svg>
+    );
   }
+
+  const isOr = ["OR", "NOR", "XOR", "XNOR"].includes(label);
+  const isXor = label === "XOR" || label === "XNOR";
+  const inverted = label === "NAND" || label === "NOR" || label === "XNOR";
+
+  if (isOr) {
+    return (
+      <svg viewBox="0 0 150 96" width="150" height="96" aria-hidden="true" overflow="visible">
+        <line x1="0" y1="26" x2="18" y2="26" stroke={stroke} strokeWidth="3" strokeLinecap="round" />
+        <line x1="0" y1="70" x2="18" y2="70" stroke={stroke} strokeWidth="3" strokeLinecap="round" />
+        {terminal(26, "in1")}
+        {terminal(70, "in2")}
+        {isXor && (
+          <path
+            d="M 10 14 Q 27 48 10 82"
+            fill="none"
+            stroke={stroke}
+            strokeWidth="2.6"
+          />
+        )}
+        <path
+          d="M 18 14 Q 62 48 18 82 Q 68 86 132 48 Q 68 10 18 14 Z"
+          fill={fill}
+          stroke={stroke}
+          strokeWidth="2.6"
+          strokeLinejoin="round"
+          filter={glow}
+        />
+        {inverted ? (
+          <>
+            <circle cx="138" cy="48" r="7" fill={bubbleFill} stroke={stroke} strokeWidth="2.4" />
+            <line x1="145" y1="48" x2="150" y2="48" stroke={stroke} strokeWidth="3" strokeLinecap="round" />
+          </>
+        ) : (
+          <line x1="132" y1="48" x2="150" y2="48" stroke={stroke} strokeWidth="3" strokeLinecap="round" />
+        )}
+        {output}
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 150 96" width="150" height="96" aria-hidden="true" overflow="visible">
+      <line x1="0" y1="26" x2="16" y2="26" stroke={stroke} strokeWidth="3" strokeLinecap="round" />
+      <line x1="0" y1="70" x2="16" y2="70" stroke={stroke} strokeWidth="3" strokeLinecap="round" />
+      {terminal(26, "in1")}
+      {terminal(70, "in2")}
+      <path
+        d="M 16 14 H 68 Q 124 14 124 48 Q 124 82 68 82 H 16 Z"
+        fill={fill}
+        stroke={stroke}
+        strokeWidth="2.6"
+        strokeLinejoin="round"
+        filter={glow}
+      />
+      {inverted ? (
+        <>
+          <circle cx="132" cy="48" r="7" fill={bubbleFill} stroke={stroke} strokeWidth="2.4" />
+          <line x1="139" y1="48" x2="150" y2="48" stroke={stroke} strokeWidth="3" strokeLinecap="round" />
+        </>
+      ) : (
+        <line x1="124" y1="48" x2="150" y2="48" stroke={stroke} strokeWidth="3" strokeLinecap="round" />
+      )}
+      {output}
+    </svg>
+  );
 }
 
 export default function AnimatedCircuit({
@@ -215,551 +460,273 @@ export default function AnimatedCircuit({
   probe,
   outputs,
 }: Props) {
-  const dragRef = useRef({
-    active: false,
-    x: 0,
-    y: 0,
-    panX: 0,
-    panY: 0,
-  });
-
   const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const panRef = useRef({
+    dragging: false,
     x: 0,
     y: 0,
+    startX: 0,
+    startY: 0,
   });
 
-  const nodeById = useMemo(
-    () =>
-      new Map(
-        circuit.nodes.map((node) => [
-          node.id,
-          node,
-        ])
-      ),
-    [circuit.nodes]
+  const normalized = useMemo(
+    () => normalizeCircuit(circuit, variables),
+    [circuit, variables],
   );
 
-  const incoming = useMemo(() => {
-    const map = new Map<string, number[]>();
+  const nodeById = useMemo(
+    () => new Map(normalized.nodes.map((node) => [node.id, node])),
+    [normalized.nodes],
+  );
 
-    circuit.edges.forEach((edge, index) => {
-      map.set(edge.target, [
-        ...(map.get(edge.target) ?? []),
-        index,
-      ]);
-    });
-
-    return map;
-  }, [circuit.edges]);
-
-  const values = useMemo(() => {
-    const cache = new Map<string, number>();
-    const visiting = new Set<string>();
-
-    const resolve = (id: string): number => {
-      if (
-        Object.prototype.hasOwnProperty.call(
-          probe,
-          id
-        )
-      ) {
-        return probe[id] ?? 0;
-      }
-
-      if (cache.has(id)) {
-        return cache.get(id)!;
-      }
-
-      if (visiting.has(id)) {
-        return 0;
-      }
-
-      const node = nodeById.get(id);
-
-      if (!node) {
-        return 0;
-      }
-
-      visiting.add(id);
-
-      const inputs = (
-        incoming.get(id) ?? []
-      ).map((edgeIndex) =>
-        resolve(
-          circuit.edges[edgeIndex].source
-        )
-      );
-
-      const value = evalGate(
-        node.type,
-        inputs
-      );
-
-      visiting.delete(id);
-      cache.set(id, value);
-
-      return value;
-    };
-
-    circuit.nodes.forEach((node) =>
-      resolve(node.id)
-    );
-
-    return cache;
-  }, [
-    circuit,
-    incoming,
-    nodeById,
-    probe,
-  ]);
+  const signals = useMemo(
+    () =>
+      resolveSignals(
+        normalized.nodes,
+        normalized.edges,
+        variables,
+        probe,
+      ),
+    [normalized.nodes, normalized.edges, variables, probe],
+  );
 
   const layout = useMemo<Layout>(() => {
+    const incoming = new Map<string, NormalizedEdge[]>();
+    normalized.edges.forEach((edge) => {
+      const current = incoming.get(edge.target) ?? [];
+      current.push(edge);
+      incoming.set(edge.target, current);
+    });
+
     const depth = new Map<string, number>();
-    const active = new Set<string>();
+    const visiting = new Set<string>();
 
-    const visit = (id: string): number => {
-      if (depth.has(id)) {
-        return depth.get(id)!;
-      }
+    function visit(id: string): number {
+      if (depth.has(id)) return depth.get(id)!;
+      if (visiting.has(id)) return 1;
 
-      if (active.has(id)) {
-        return 1;
-      }
-
-      active.add(id);
-
-      const parents = (
-        incoming.get(id) ?? []
-      )
-        .map(
-          (edgeIndex) =>
-            circuit.edges[edgeIndex].source
-        )
-        .filter((source) =>
-          nodeById.has(source)
-        );
-
-      const value = parents.length
+      visiting.add(id);
+      const parents = (incoming.get(id) ?? []).map((edge) => edge.source);
+      const parentDepth = parents.length
         ? Math.max(...parents.map(visit)) + 1
         : 1;
+      visiting.delete(id);
+      depth.set(id, parentDepth);
+      return parentDepth;
+    }
 
-      active.delete(id);
-      depth.set(id, value);
+    normalized.nodes.forEach((node) => visit(node.id));
 
-      return value;
-    };
-
-    circuit.nodes.forEach((node) =>
-      visit(node.id)
+    const maxDepth = Math.max(1, ...depth.values());
+    const columns = Array.from({ length: maxDepth }, (_, index) =>
+      normalized.nodes.filter((node) => depth.get(node.id) === index + 1),
     );
 
-    const maxDepth = Math.max(
-      1,
-      ...depth.values()
-    );
-
-    const columns = Array.from(
-      { length: maxDepth },
-      (_, i) =>
-        circuit.nodes.filter(
-          (node) =>
-            depth.get(node.id) === i + 1
-        )
-    );
-
-    const left = 290;
-    const columnGap = 300;
-    const right = 210;
-    const top = 80;
+    const left = 215;
+    const columnGap = 250;
+    const top = 82;
     const bottom = 90;
-    const rowGap = 154;
+    const rowGap = 128;
+    const outputExtra = normalized.outputIds.length > 1 ? normalized.outputIds.length * 25 : 0;
 
     const height = Math.max(
-      610,
-      Math.max(
-        1,
-        ...columns.map(
-          (column) => column.length
-        )
-      ) *
-        rowGap +
-        top +
-        bottom
+      MIN_CANVAS_H,
+      Math.max(1, ...columns.map((column) => column.length)) * rowGap + top + bottom + outputExtra,
     );
 
     const width = Math.max(
-      1220,
-      left + maxDepth * columnGap + right
+      CANVAS_W,
+      left + maxDepth * columnGap + 240,
     );
 
-    const nodes = new Map<string, Point>();
+    const nodePoints = new Map<string, Point>();
 
-    columns.forEach((column, index) => {
-      const x =
-        left + index * columnGap;
+    columns.forEach((column, columnIndex) => {
+      const x = left + columnIndex * columnGap;
+      const sorted = [...column].sort((a, b) => a.id.localeCompare(b.id));
+      const available = height - top - bottom;
+      const step = sorted.length <= 1 ? 0 : Math.max(118, available / (sorted.length - 1));
 
-      const sorted = [...column].sort(
-        (a, b) => {
-          const averageY = (
-            node: Node
-          ) => {
-            const ys = (
-              incoming.get(node.id) ?? []
-            )
-              .map(
-                (edgeIndex) =>
-                  nodes.get(
-                    circuit.edges[edgeIndex]
-                      .source
-                  )?.y
-              )
-              .filter(
-                (
-                  value
-                ): value is number =>
-                  value !== undefined
-              );
-
-            return ys.length
-              ? ys.reduce(
-                  (sum, value) =>
-                    sum + value,
-                  0
-                ) / ys.length
-              : Number.MAX_SAFE_INTEGER;
-          };
-
-          return (
-            averageY(a) -
-            averageY(b)
-          );
-        }
-      );
-
-      const step =
-        sorted.length <= 1
-          ? 0
-          : Math.max(
-              136,
-              (height - top - bottom) /
-                (sorted.length - 1)
-            );
-
-      sorted.forEach(
-        (node, row) => {
-          const y =
-            sorted.length === 1
-              ? height / 2
-              : top + row * step;
-
-          nodes.set(node.id, {
-            x,
-            y,
-          });
-        }
-      );
+      sorted.forEach((node, row) => {
+        const centerY = sorted.length <= 1 ? height / 2 : top + row * step;
+        nodePoints.set(node.id, {
+          x,
+          y: centerY - nodeHeight(node) / 2,
+        });
+      });
     });
 
-    const targetPins = new Map<
-      number,
-      Point
-    >();
+    // Inputs are always shown on the far left, even when the backend represents
+    // them only through variables rather than explicit circuit nodes.
+    const inputPins = new Map<string, Point>();
+    variables.forEach((variable, index) => {
+      const node = normalized.nodes.find((candidate) => candidate.id === variable && isInputNode(candidate));
+      const point = node ? nodePoints.get(node.id) : undefined;
+      inputPins.set(variable, {
+        x: 54 + INPUT_W,
+        y: point ? point.y + INPUT_H / 2 : 82 + index * 92,
+      });
+    });
 
-    const sourcePins = new Map<
-      string,
-      Point
-    >();
+    // If backend input nodes exist, force their visual positions to the far left.
+    normalized.nodes.filter(isInputNode).forEach((node, index) => {
+      const variableIndex = variables.indexOf(node.id);
+      const y = variableIndex >= 0 ? inputPins.get(variables[variableIndex])?.y ?? 82 + index * 92 : 82 + index * 92;
+      nodePoints.set(node.id, {
+        x: 54,
+        y: y - INPUT_H / 2,
+      });
+      inputPins.set(node.id, {
+        x: 54 + INPUT_W,
+        y,
+      });
+    });
 
-    circuit.nodes.forEach((node) => {
-      const point = nodes.get(node.id);
+    const sourcePins = new Map<string, Point>();
+    const targetPins = new Map<string, Point>();
+    const outputPins = new Map<string, Point>();
 
+    normalized.nodes.forEach((node) => {
+      const point = nodePoints.get(node.id);
       if (!point) return;
 
-      const size = gateSize(
-        node.type
+      if (isInputNode(node)) {
+        sourcePins.set(node.id, {
+          x: point.x + INPUT_W,
+          y: point.y + INPUT_H / 2,
+        });
+        return;
+      }
+
+      if (isOutputNode(node)) {
+        targetPins.set(`${node.id}:0`, {
+          x: point.x,
+          y: point.y + OUTPUT_H / 2,
+        });
+        outputPins.set(node.id, {
+          x: point.x,
+          y: point.y + OUTPUT_H / 2,
+        });
+        return;
+      }
+
+      sourcePins.set(node.id, gateOutputPoint(point));
+
+      const count = Math.max(
+        gateInputCount(node.type),
+        (incoming.get(node.id) ?? []).length,
       );
 
-      sourcePins.set(node.id, {
-        x:
-          point.x +
-          size.width / 2 +
-          ([
-            "NOT",
-            "NAND",
-            "NOR",
-            "XNOR",
-          ].includes(
-            upper(node.type)
-          )
-            ? 8
-            : 0),
-        y: point.y,
-      });
-
-      const slots = inputOffsets(
-        Math.max(
-          1,
-          node.inputs.length
-        ),
-        size.height
-      );
-
-      (
-        incoming.get(node.id) ?? []
-      ).forEach(
-        (edgeIndex, occurrence) => {
-          const edge =
-            circuit.edges[edgeIndex];
-
-          const exact =
-            node.inputs.findIndex(
-              (input) =>
-                input === edge.source
-            );
-
-          const slot =
-            exact >= 0
-              ? exact
-              : occurrence;
-
-          targetPins.set(
-            edgeIndex,
-            {
-              x:
-                point.x -
-                size.width / 2,
-              y:
-                point.y +
-                (slots[slot] ?? 0),
-            }
-          );
-        }
-      );
+      for (let slot = 0; slot < count; slot += 1) {
+        targetPins.set(
+          `${node.id}:${slot}`,
+          gateInputPoint(point, node, slot, count),
+        );
+      }
     });
 
-    const inputPins = new Map<
-      string,
-      Point
-    >();
+    normalized.outputIds.forEach((outputId, index) => {
+      const point = nodePoints.get(outputId);
+      if (!point) return;
 
-    const minGap = Math.max(
-      82,
-      rowGap - 28
-    );
-
-    variables.forEach(
-      (variable, index) => {
-        const targetYs =
-          circuit.edges
-            .map(
-              (
-                edge,
-                edgeIndex
-              ) => ({
-                edge,
-                edgeIndex,
-              })
-            )
-            .filter(
-              ({ edge }) =>
-                edge.source === variable
-            )
-            .map(
-              ({ edgeIndex }) =>
-                targetPins.get(
-                  edgeIndex
-                )?.y
-            )
-            .filter(
-              (
-                value
-              ): value is number =>
-                value !== undefined
-            );
-
-        const natural =
-          targetYs.length
-            ? targetYs.reduce(
-                (sum, value) =>
-                  sum + value,
-                0
-              ) / targetYs.length
-            : top + index * minGap;
-
-        inputPins.set(
-          variable,
-          {
-            x: 94,
-            y: Math.max(
-              54,
-              Math.min(
-                height - 54,
-                natural
-              )
-            ),
-          }
-        );
+      // For an inferred sink that is itself a gate, make a visible output pin
+      // just to its right. This is what fixes backends that omit `output`.
+      if (!isOutputNode(nodeById.get(outputId) ?? { id: outputId, type: "" })) {
+        outputPins.set(outputId, {
+          x: point.x + nodeWidth(nodeById.get(outputId)!) + 86,
+          y: point.y + nodeHeight(nodeById.get(outputId)!) / 2,
+        });
       }
-    );
-
-    const ordered = variables
-      .map((variable) => ({
-        variable,
-        y: inputPins.get(variable)!.y,
-      }))
-      .sort((a, b) => a.y - b.y);
-
-    let cursor = 52;
-
-    ordered.forEach(
-      ({ variable, y }) => {
-        const next = Math.min(
-          height - 52,
-          Math.max(y, cursor)
-        );
-
-        inputPins.set(
-          variable,
-          {
-            x: 94,
-            y: next,
-          }
-        );
-
-        cursor = next + minGap;
-      }
-    );
-
-    const lanes = new Map<
-      number,
-      number
-    >();
-
-    const used = new Map<
-      string,
-      number
-    >();
-
-    circuit.edges.forEach(
-      (edge, index) => {
-        const source =
-          sourcePins.get(
-            edge.source
-          ) ??
-          inputPins.get(
-            edge.source
-          ) ?? {
-            x: 140,
-            y: height / 2,
-          };
-
-        const target =
-          targetPins.get(index) ?? {
-            x: source.x + 120,
-            y: source.y,
-          };
-
-        const key = `${Math.round(
-          source.x
-        )}-${Math.round(target.x)}`;
-
-        const count =
-          used.get(key) ?? 0;
-
-        used.set(
-          key,
-          count + 1
-        );
-
-        lanes.set(
-          index,
-          source.x +
-            (target.x - source.x) *
-              0.5 +
-            (count - 1.5) * 28
-        );
-      }
-    );
+    });
 
     return {
       width,
       height,
-      nodes,
-      inputPins,
+      nodes: nodePoints,
       sourcePins,
       targetPins,
-      lanes,
+      inputPins,
+      outputPins,
     };
-  }, [
-    circuit,
-    incoming,
-    nodeById,
-    variables,
-  ]);
+  }, [normalized, variables, nodeById]);
 
-  const outputValue =
-    values.get(circuit.output) ?? 0;
+  const outputLabels = useMemo(() => {
+    const labels = outputs.filter(Boolean);
+    return normalized.outputIds.map((id, index) => labels[index] ?? (index === 0 ? "F" : `F${index + 1}`));
+  }, [outputs, normalized.outputIds]);
 
-  const resetView = () => {
-    setZoom(1);
+  const sourcePointFor = (sourceId: string): Point | undefined => {
+    return (
+      layout.sourcePins.get(sourceId) ??
+      layout.inputPins.get(sourceId)
+    );
+  };
+
+  const beginPan = (event: React.PointerEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest("button")) return;
+    panRef.current = {
+      dragging: true,
+      x: event.clientX,
+      y: event.clientY,
+      startX: pan.x,
+      startY: pan.y,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const movePan = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!panRef.current.dragging) return;
     setPan({
-      x: 0,
-      y: 0,
+      x: panRef.current.startX + event.clientX - panRef.current.x,
+      y: panRef.current.startY + event.clientY - panRef.current.y,
     });
   };
 
+  const stopPan = () => {
+    panRef.current.dragging = false;
+  };
+
   return (
-    <div className="logic-circuit-shell">
-      <div className="logic-circuit-head">
+    <div
+      className="overflow-hidden rounded-3xl border border-slate-700 bg-[#0b1020] shadow-2xl"
+      style={{ position: "relative" }}
+    >
+      <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-[#101727] px-4 py-3">
         <div>
-          <span>GENERATED CIRCUIT</span>
-          <small>
-            ENGINEERING VIEW · HTML / CSS ROUTER
-          </small>
+          <p className="text-[10px] font-black uppercase tracking-[.16em] text-cyan-300">
+            Generated circuit
+          </p>
+          <p className="mt-1 text-xs font-semibold text-slate-400">
+            BooleanCircuitDesigner canvas · auto-routed implementation
+          </p>
         </div>
 
-        <div className="logic-circuit-actions">
+        <div className="flex items-center gap-1">
           <button
             type="button"
-            onClick={() =>
-              setZoom((z) =>
-                Math.max(
-                  0.4,
-                  +(z - 0.08).toFixed(2)
-                )
-              )
-            }
-            aria-label="Zoom out"
+            onClick={() => setZoom((value) => Math.max(0.55, Number((value - 0.1).toFixed(2))))}
+            className="h-8 w-8 rounded-lg border border-white/10 bg-white/5 text-sm font-black text-slate-300 hover:bg-white/10"
           >
             −
           </button>
-
-          <button
-            type="button"
-            className="logic-circuit-zoom"
-          >
+          <span className="min-w-[54px] text-center text-[11px] font-black text-slate-400">
             {Math.round(zoom * 100)}%
-          </button>
-
+          </span>
           <button
             type="button"
-            onClick={() =>
-              setZoom((z) =>
-                Math.min(
-                  1.5,
-                  +(z + 0.08).toFixed(2)
-                )
-              )
-            }
-            aria-label="Zoom in"
+            onClick={() => setZoom((value) => Math.min(1.6, Number((value + 0.1).toFixed(2))))}
+            className="h-8 w-8 rounded-lg border border-white/10 bg-white/5 text-sm font-black text-slate-300 hover:bg-white/10"
           >
             +
           </button>
-
           <button
             type="button"
-            onClick={resetView}
+            onClick={() => {
+              setZoom(1);
+              setPan({ x: 0, y: 0 });
+            }}
+            className="ml-1 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[10px] font-black text-slate-300 hover:bg-white/10"
           >
             Fit
           </button>
@@ -767,451 +734,318 @@ export default function AnimatedCircuit({
       </div>
 
       <div
-        className={`logic-circuit-stage${
-          dragRef.current.active
-            ? " is-dragging"
-            : ""
-        }`}
-        onPointerDown={(event) => {
-          if (
-            (event.target as HTMLElement).closest(
-              "button"
-            )
-          ) {
-            return;
-          }
-
-          dragRef.current = {
-            active: true,
-            x: event.clientX,
-            y: event.clientY,
-            panX: pan.x,
-            panY: pan.y,
-          };
-
-          event.currentTarget.setPointerCapture(
-            event.pointerId
-          );
-        }}
-        onPointerMove={(event) => {
-          if (
-            !dragRef.current.active
-          ) {
-            return;
-          }
-
-          setPan({
-            x:
-              dragRef.current.panX +
-              event.clientX -
-              dragRef.current.x,
-            y:
-              dragRef.current.panY +
-              event.clientY -
-              dragRef.current.y,
-          });
-        }}
-        onPointerUp={() => {
-          dragRef.current.active = false;
-        }}
-        onPointerCancel={() => {
-          dragRef.current.active = false;
-        }}
+        className="relative min-h-[610px] overflow-hidden bg-[#0b1020]"
+        onPointerDown={beginPan}
+        onPointerMove={movePan}
+        onPointerUp={stopPan}
+        onPointerCancel={stopPan}
+        style={{ cursor: panRef.current.dragging ? "grabbing" : "grab" }}
       >
-        {/* Fixed viewport */}
-        <div
-          className="logic-circuit-surface"
-          style={{
-            position: "absolute",
-            inset: 0,
-            width: "100%",
-            height: "100%",
-            overflow: "hidden",
-          }}
+        <svg
+          viewBox={`0 0 ${layout.width} ${layout.height}`}
+          className="block h-[610px] w-full select-none"
+          preserveAspectRatio="xMidYMid meet"
         >
-          {/* Only this layer is transformed */}
-          <div
-            className="logic-circuit-content"
-            style={{
-              position: "absolute",
-              left: 0,
-              top: 0,
-              width: layout.width,
-              height: layout.height,
-              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-              transformOrigin: "0 0",
-              willChange: "transform",
-            }}
-          >
-            {/* INPUTS */}
-            {variables.map(
-              (variable) => {
-                const point =
-                  layout.inputPins.get(
-                    variable
-                  );
+          <defs>
+            <pattern
+              id="logicflow-grid"
+              width="28"
+              height="28"
+              patternUnits="userSpaceOnUse"
+            >
+              <path
+                d="M 28 0 L 0 0 0 28"
+                fill="none"
+                stroke="rgba(148,163,184,.08)"
+                strokeWidth="1"
+              />
+            </pattern>
 
-                if (!point) {
-                  return null;
-                }
+            <filter id="logicflow-wire-glow" x="-50%" y="-50%" width="200%" height="200%">
+              <feGaussianBlur stdDeviation="5" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
 
-                const high =
-                  Boolean(
-                    probe[variable]
-                  );
+          <rect width={layout.width} height={layout.height} fill="url(#logicflow-grid)" />
 
-                return (
-                  <div
-                    key={`input-${variable}`}
-                    className="logic-circuit-input"
-                    style={{
-                      left: point.x,
-                      top: point.y,
-                    }}
-                  >
-                    <span className="logic-circuit-input-label">
-                      {variable}
-                    </span>
+          <g transform={`translate(${pan.x / zoom} ${pan.y / zoom}) scale(${zoom})`}>
+            <text x="26" y="32" fill="rgba(148,163,184,.5)" fontSize="10" fontWeight="900" letterSpacing="2">
+              INPUTS
+            </text>
+            <text x="250" y="32" fill="rgba(148,163,184,.5)" fontSize="10" fontWeight="900" letterSpacing="2">
+              LOGIC
+            </text>
+            <text x={layout.width - 260} y="32" fill="rgba(148,163,184,.5)" fontSize="10" fontWeight="900" letterSpacing="2">
+              OUTPUT
+            </text>
 
-                    <span
-                      className={`logic-circuit-pin ${
-                        high
-                          ? "is-high"
-                          : ""
-                      }`}
-                    />
-                  </div>
-                );
-              }
-            )}
+            {/* Reconstructed / backend-provided wires */}
+            {normalized.edges.map((edge) => {
+              const source = sourcePointFor(edge.source);
+              const target = layout.targetPins.get(`${edge.target}:${edge.slot}`);
+              if (!source || !target) return null;
 
-            {/* WIRES */}
-            {circuit.edges.map(
-              (edge, index) => {
-                const source =
-                  layout.sourcePins.get(
-                    edge.source
-                  ) ??
-                  layout.inputPins.get(
-                    edge.source
-                  ) ?? {
-                    x: 140,
-                    y: layout.height / 2,
-                  };
-
-                const target =
-                  layout.targetPins.get(
-                    index
-                  ) ?? {
-                    x: source.x + 120,
-                    y: source.y,
-                  };
-
-                const lane =
-                  layout.lanes.get(
-                    index
-                  ) ??
-                  (source.x +
-                    target.x) /
-                    2;
-
-                const high =
-                  Object.prototype.hasOwnProperty.call(
-                    probe,
-                    edge.source
-                  )
-                    ? Boolean(
-                        probe[
-                          edge.source
-                        ]
-                      )
-                    : Boolean(
-                        values.get(
-                          edge.source
-                        )
-                      );
-
-                const segments =
-                  orthogonalSegments(
-                    source,
-                    target,
-                    lane
-                  );
-
-                return (
-                  <div
-                    key={`edge-${index}`}
-                  >
-                    {segments.map(
-                      (
-                        segment,
-                        segmentIndex
-                      ) => (
-                        <div
-                          key={`${index}-${segmentIndex}`}
-                          className={`logic-wire-segment ${
-                            segment.horizontal
-                              ? "horizontal"
-                              : "vertical"
-                          } ${
-                            high
-                              ? "is-high"
-                              : ""
-                          }`}
-                          data-signal={
-                            high
-                              ? "1"
-                              : "0"
-                          }
-                          aria-label={`Signal ${
-                            high
-                              ? "high"
-                              : "low"
-                          }`}
-                          style={{
-                            left: segment.x,
-                            top: segment.y,
-                            width:
-                              segment.width,
-                            height:
-                              segment.height,
-                          }}
-                        />
-                      )
-                    )}
-
-                    <span
-                      className={`logic-wire-junction ${
-                        high
-                          ? "is-high"
-                          : ""
-                      }`}
-                      data-signal={
-                        high
-                          ? "1"
-                          : "0"
-                      }
-                      style={{
-                        left: lane,
-                        top: source.y,
-                      }}
-                    />
-
-                    <span
-                      className={`logic-wire-end ${
-                        high
-                          ? "is-high"
-                          : ""
-                      }`}
-                      data-signal={
-                        high
-                          ? "1"
-                          : "0"
-                      }
-                      style={{
-                        left: target.x,
-                        top: target.y,
-                      }}
-                    />
-                  </div>
-                );
-              }
-            )}
-
-            {/* GATES */}
-            {circuit.nodes.map(
-              (node) => {
-                const point =
-                  layout.nodes.get(
-                    node.id
-                  );
-
-                if (!point) {
-                  return null;
-                }
-
-                const size =
-                  gateSize(
-                    node.type
-                  );
-
-                const high =
-                  Boolean(
-                    values.get(
-                      node.id
-                    )
-                  );
-
-                const type =
-                  upper(node.type);
-
-                const inverted = [
-                  "NOT",
-                  "NAND",
-                  "NOR",
-                  "XNOR",
-                ].includes(type);
-
-                return (
-                  <div
-                    key={node.id}
-                    className={`logic-gate-node ${gateClass(
-                      type
-                    )} ${
-                      high
-                        ? "is-high"
-                        : ""
-                    }`}
-                    style={{
-                      left: point.x,
-                      top: point.y,
-                      width: size.width,
-                      height: size.height,
-                    }}
-                    title={`${type} · ${node.id}`}
-                  >
-                    <div className="logic-gate-shape">
-                      {type === "NOT" ? (
-                        <div className="logic-gate-not-body" />
-                      ) : (
-                        <div className="logic-gate-main-body" />
-                      )}
-
-                      {type ===
-                        "XOR" ||
-                      type ===
-                        "XNOR" ? (
-                        <div className="logic-gate-xor-trace" />
-                      ) : null}
-
-                      {inverted ? (
-                        <span className="logic-gate-bubble" />
-                      ) : null}
-                    </div>
-
-                    <span className="logic-gate-label">
-                      {type}
-                    </span>
-
-                    <span className="logic-gate-id">
-                      {node.id}
-                    </span>
-                  </div>
-                );
-              }
-            )}
-
-            {/* OUTPUT */}
-            {(() => {
-              const outputPoint =
-                layout.nodes.get(
-                  circuit.output
-                );
-
-              if (!outputPoint) {
-                return null;
-              }
-
-              const outputGate =
-                gateSize(
-                  nodeById.get(
-                    circuit.output
-                  )?.type ??
-                    "AND"
-                );
-
-              const outputType =
-                upper(
-                  nodeById.get(
-                    circuit.output
-                  )?.type ?? ""
-                );
-
-              const outputOffset =
-                [
-                  "NOT",
-                  "NAND",
-                  "NOR",
-                  "XNOR",
-                ].includes(
-                  outputType
-                )
-                  ? 8
-                  : 0;
-
-              const outputX =
-                outputPoint.x +
-                outputGate.width /
-                  2 +
-                outputOffset;
+              const bendX = source.x + Math.max(44, (target.x - source.x) * 0.5);
+              const path = makeOrthogonalPath(source, target, bendX);
+              const high = Boolean(signals.get(edge.source));
 
               return (
-                <>
-                  <div
-                    className={`logic-output-wire ${
-                      outputValue
-                        ? "is-high"
-                        : ""
-                    }`}
-                    style={{
-                      left: outputX,
-                      top: outputPoint.y,
-                      width: Math.max(
-                        100,
-                        layout.width -
-                          120 -
-                          outputX
-                      ),
-                    }}
+                <g key={edge.id}>
+                  <path
+                    d={path}
+                    fill="none"
+                    stroke={high ? "rgba(52,211,153,.50)" : "rgba(34,211,238,.11)"}
+                    strokeWidth={high ? 12 : 9}
+                    filter="url(#logicflow-wire-glow)"
                   />
-
-                  <span
-                    className={`logic-output-pin ${
-                      outputValue
-                        ? "is-high"
-                        : ""
-                    }`}
-                    style={{
-                      left:
-                        layout.width -
-                        120,
-                      top: outputPoint.y,
-                    }}
+                  <path
+                    d={path}
+                    fill="none"
+                    stroke={high ? "#34d399" : "#22d3ee"}
+                    strokeOpacity={high ? 1 : 0.68}
+                    strokeWidth={high ? 3.5 : 2.5}
                   />
-
-                  <div
-                    className="logic-output-label"
-                    style={{
-                      left:
-                        layout.width -
-                        100,
-                      top: outputPoint.y,
-                    }}
-                  >
-                    {outputs[0] ||
-                      "F"}{" "}
-                    <strong>
-                      {outputValue}
-                    </strong>
-                  </div>
-                </>
+                  <circle
+                    cx={target.x}
+                    cy={target.y}
+                    r={high ? 5 : 3.5}
+                    fill={high ? "#34d399" : "#22d3ee"}
+                    filter={high ? "url(#logicflow-wire-glow)" : undefined}
+                  />
+                </g>
               );
-            })()}
-          </div>
-        </div>
+            })}
+
+            {/* Inputs: use variables even if backend omitted physical input nodes. */}
+            {variables.map((variable, index) => {
+              const node = normalized.nodes.find(
+                (candidate) => isInputNode(candidate) && candidate.id === variable,
+              );
+              const point = node
+                ? layout.nodes.get(node.id)
+                : { x: 54, y: 82 + index * 92 - INPUT_H / 2 };
+
+              if (!point) return null;
+              const high = Boolean(probe[variable]);
+              const outputPin = node
+                ? layout.sourcePins.get(node.id)
+                : layout.inputPins.get(variable);
+
+              return (
+                <g key={`input-${variable}`}>
+                  <rect
+                    x={point.x}
+                    y={point.y}
+                    width={INPUT_W}
+                    height={INPUT_H}
+                    rx="18"
+                    fill={high ? "#063b35" : "#111827"}
+                    stroke={high ? "#34d399" : "rgba(148,163,184,.28)"}
+                    strokeWidth={high ? 2.5 : 1.5}
+                  />
+                  <text x={point.x + 16} y={point.y + 21} fill="rgba(148,163,184,.62)" fontSize="9" fontWeight="900" letterSpacing="1.5">
+                    INPUT
+                  </text>
+                  <text x={point.x + 16} y={point.y + 50} fill="white" fontSize="22" fontWeight="900">
+                    {variable}
+                  </text>
+                  <rect
+                    x={point.x + INPUT_W - 54}
+                    y={point.y + 16}
+                    width="40"
+                    height="40"
+                    rx="11"
+                    fill={high ? "rgba(52,211,153,.22)" : "rgba(148,163,184,.08)"}
+                    stroke={high ? "rgba(52,211,153,.7)" : "rgba(148,163,184,.18)"}
+                  />
+                  <text
+                    x={point.x + INPUT_W - 34}
+                    y={point.y + 43}
+                    textAnchor="middle"
+                    fill={high ? "#34d399" : "#64748b"}
+                    fontSize="17"
+                    fontWeight="900"
+                  >
+                    {high ? "1" : "0"}
+                  </text>
+                  {outputPin && (
+                    <circle
+                      cx={outputPin.x}
+                      cy={outputPin.y}
+                      r={high ? 6 : 5}
+                      fill={high ? "#34d399" : "#22d3ee"}
+                      filter={high ? "url(#logicflow-wire-glow)" : undefined}
+                    />
+                  )}
+                </g>
+              );
+            })}
+
+            {/* Real gate SVGs */}
+            {normalized.nodes.filter(isGateNode).map((node) => {
+              const point = layout.nodes.get(node.id);
+              if (!point) return null;
+              const high = Boolean(signals.get(node.id));
+              const incoming = (normalized.edges.filter((edge) => edge.target === node.id)).length;
+              const count = Math.max(gateInputCount(node.type), incoming);
+
+              return (
+                <g key={node.id} transform={`translate(${point.x} ${point.y})`}>
+                  <g transform="translate(0 0)">
+                    <GateSvg type={node.type} high={high} />
+                  </g>
+
+                  <text
+                    x="75"
+                    y="88"
+                    textAnchor="middle"
+                    fill={high ? "#6ee7b7" : "rgba(226,232,240,.82)"}
+                    fontSize="9"
+                    fontWeight="900"
+                    letterSpacing="1.2"
+                  >
+                    {upper(node.type)}
+                  </text>
+
+                  {Array.from({ length: count }).map((_, slot) => {
+                    const pin = layout.targetPins.get(`${node.id}:${slot}`);
+                    if (!pin) return null;
+                    return (
+                      <circle
+                        key={`${node.id}-in-${slot}`}
+                        cx={pin.x - point.x}
+                        cy={pin.y - point.y}
+                        r="5"
+                        fill="#1e293b"
+                        stroke="#94a3b8"
+                        strokeWidth="1.5"
+                      />
+                    );
+                  })}
+
+                  <circle
+                    cx={GATE_W}
+                    cy={GATE_H / 2}
+                    r={high ? 6 : 5}
+                    fill={high ? "#34d399" : "#22d3ee"}
+                    stroke="#0f172a"
+                    strokeWidth="1.5"
+                    filter={high ? "url(#logicflow-wire-glow)" : undefined}
+                  />
+                </g>
+              );
+            })}
+
+            {/* Explicit OUTPUT nodes from backend */}
+            {normalized.nodes.filter(isOutputNode).map((node) => {
+              const point = layout.nodes.get(node.id);
+              if (!point) return null;
+              const high = Boolean(signals.get(node.id));
+              const label = node.id === normalized.outputIds[0] ? outputLabels[0] : outputLabels[normalized.outputIds.indexOf(node.id)] ?? "F";
+              const inputPin = layout.outputPins.get(node.id) ?? layout.targetPins.get(`${node.id}:0`);
+
+              return (
+                <g key={node.id}>
+                  <rect
+                    x={point.x}
+                    y={point.y}
+                    width={OUTPUT_W}
+                    height={OUTPUT_H}
+                    rx="18"
+                    fill="#111827"
+                    stroke={high ? "#34d399" : "rgba(148,163,184,.28)"}
+                    strokeWidth={high ? 2.5 : 1.5}
+                  />
+                  <text x={point.x + 16} y={point.y + 21} fill="rgba(148,163,184,.62)" fontSize="9" fontWeight="900" letterSpacing="1.5">
+                    OUTPUT
+                  </text>
+                  <text x={point.x + 16} y={point.y + 50} fill="white" fontSize="22" fontWeight="900">
+                    {label}
+                  </text>
+                  <text x={point.x + OUTPUT_W - 24} y={point.y + 43} textAnchor="middle" fill={high ? "#34d399" : "#64748b"} fontSize="16" fontWeight="900">
+                    {high ? "1" : "0"}
+                  </text>
+                  {inputPin && (
+                    <circle
+                      cx={inputPin.x}
+                      cy={inputPin.y}
+                      r={high ? 6 : 5}
+                      fill={high ? "#34d399" : "#22d3ee"}
+                      filter={high ? "url(#logicflow-wire-glow)" : undefined}
+                    />
+                  )}
+                </g>
+              );
+            })}
+
+            {/* Inferred output cards for sink gates when backend has no output node/key. */}
+            {normalized.outputIds.map((outputId, index) => {
+              const node = nodeById.get(outputId);
+              if (!node || isOutputNode(node)) return null;
+              const point = layout.nodes.get(outputId);
+              const outputPoint = layout.outputPins.get(outputId);
+              if (!point || !outputPoint) return null;
+              const high = Boolean(signals.get(outputId));
+              const label = outputLabels[index] ?? (index === 0 ? "F" : `F${index + 1}`);
+              const source = layout.sourcePins.get(outputId);
+              if (!source) return null;
+
+              const bendX = source.x + 42;
+              const path = makeOrthogonalPath(source, outputPoint, bendX);
+
+              return (
+                <g key={`inferred-output-${outputId}`}>
+                  <path
+                    d={path}
+                    fill="none"
+                    stroke={high ? "rgba(52,211,153,.50)" : "rgba(34,211,238,.11)"}
+                    strokeWidth={high ? 12 : 9}
+                    filter="url(#logicflow-wire-glow)"
+                  />
+                  <path
+                    d={path}
+                    fill="none"
+                    stroke={high ? "#34d399" : "#22d3ee"}
+                    strokeOpacity={high ? 1 : 0.68}
+                    strokeWidth={high ? 3.5 : 2.5}
+                  />
+                  <rect
+                    x={outputPoint.x}
+                    y={outputPoint.y - OUTPUT_H / 2}
+                    width={OUTPUT_W}
+                    height={OUTPUT_H}
+                    rx="18"
+                    fill="#111827"
+                    stroke={high ? "#34d399" : "rgba(148,163,184,.28)"}
+                    strokeWidth={high ? 2.5 : 1.5}
+                  />
+                  <text x={outputPoint.x + 16} y={outputPoint.y - 12} fill="rgba(148,163,184,.62)" fontSize="9" fontWeight="900" letterSpacing="1.5">
+                    OUTPUT
+                  </text>
+                  <text x={outputPoint.x + 16} y={outputPoint.y + 17} fill="white" fontSize="22" fontWeight="900">
+                    {label}
+                  </text>
+                  <text x={outputPoint.x + OUTPUT_W - 24} y={outputPoint.y + 11} textAnchor="middle" fill={high ? "#34d399" : "#64748b"} fontSize="16" fontWeight="900">
+                    {high ? "1" : "0"}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
+        </svg>
       </div>
 
-      <div className="logic-circuit-foot">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 bg-[#101727] px-4 py-3 text-[10px] font-bold uppercase tracking-[.14em] text-slate-500">
         <span>
-          <i /> ROUTED WIRES · SPACED INPUTS ·
-          REAL GATE GEOMETRY
+          <span className="mr-2 inline-block h-2 w-2 rounded-full bg-cyan-400 align-middle" />
+          Routed wires · real SVG gates · inferred output
         </span>
-
         <span>
-          OUTPUT{" "}
-          <strong>
-            {outputValue}
-          </strong>
+          {variables.length} input{variables.length === 1 ? "" : "s"} · {normalized.outputIds.length} output{normalized.outputIds.length === 1 ? "" : "s"} · {normalized.edges.length} wire{normalized.edges.length === 1 ? "" : "s"}
         </span>
       </div>
     </div>
