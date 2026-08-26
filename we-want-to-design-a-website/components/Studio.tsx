@@ -49,8 +49,9 @@ export function Header({ workspace, setWorkspace, dark, toggleTheme, sound, togg
     ["studio", "01", "Studio"],
     ["solver", "02", "Logic Solver"],
     ["circuits", "03", "Circuit Lab"],
-    ["display", "04", "7-Segment"],
-    ["docs", "05", "API / Docs"],
+    ["canvas", "04", "Canvas"],
+    ["display", "05", "7-Segment"],
+    ["docs", "06", "API / Docs"],
   ];
   return (
     <header className="sticky top-0 z-50 border-b lf-header backdrop-blur-2xl">

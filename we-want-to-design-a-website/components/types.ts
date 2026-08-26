@@ -1,4 +1,10 @@
-export type Workspace = "studio" | "solver" | "circuits" | "display" | "docs";
+export type Workspace =
+  | "studio"
+  | "solver"
+  | "circuits"
+  | "canvas"
+  | "display"
+  | "docs";
 export type InputKind = "Statement" | "Boolean expression" | "Truth table" | "Minterms / Maxterms";
 export type GateMode = "AND, OR & NOT" | "NAND only" | "NOR only";
 
